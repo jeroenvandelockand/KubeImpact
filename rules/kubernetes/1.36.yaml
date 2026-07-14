@@ -1,0 +1,13 @@
+version: "1.36"
+
+removedAPIs: []
+
+deprecatedAPIs: []
+
+resourceChecks:
+  - id: "UPG-1.36-SERVICE-EXTERNALIPS"
+    name: "serviceExternalIPs"
+    severity: "medium"
+    message: "Service spec.externalIPs is deprecated in Kubernetes 1.36."
+    recommendation: "Replace spec.externalIPs with a supported exposure mechanism such as a LoadBalancer Service, NodePort, or an ingress/gateway implementation."
+    documentationURL: "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.36.md#deprecation"

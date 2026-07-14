@@ -1,0 +1,7 @@
+.git
+.github
+.idea
+web/node_modules
+web/dist
+coverage.out
+*.log

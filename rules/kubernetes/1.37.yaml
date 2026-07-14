@@ -1,0 +1,9 @@
+# Kubernetes 1.37 is a prerelease target. Keep this file limited to verified,
+# machine-detectable changes until the final release notes are published.
+version: "1.37"
+
+removedAPIs: []
+
+deprecatedAPIs: []
+
+resourceChecks: []
