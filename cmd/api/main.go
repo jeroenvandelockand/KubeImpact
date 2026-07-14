@@ -14,10 +14,18 @@ import (
 )
 
 func main() {
-	router, err := api.NewRouter()
+	shutdownSignal, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	router, cleanup, err := api.NewRouter(shutdownSignal)
 	if err != nil {
 		log.Fatalf("initialize API: %v", err)
 	}
+	defer func() {
+		if err := cleanup(); err != nil {
+			log.Printf("close application: %v", err)
+		}
+	}()
 
 	scanTimeout := durationFromEnvironment("KUBEIMPACT_SCAN_TIMEOUT", 60*time.Second)
 	server := &http.Server{
@@ -29,8 +37,6 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	shutdownSignal, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	go func() {
 		<-shutdownSignal.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

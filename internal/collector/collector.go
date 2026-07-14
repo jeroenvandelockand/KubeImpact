@@ -26,9 +26,13 @@ type Snapshot struct {
 	StatefulSets []appsv1.StatefulSet
 	DaemonSets   []appsv1.DaemonSet
 	Services     []corev1.Service
+	Namespaces   []corev1.Namespace
 
-	Resources []models.KubernetesResource
-	Warnings  []string
+	Resources             []models.KubernetesResource
+	DeprecatedAPIRequests []models.DeprecatedAPIRequest
+	Sources               map[string]string
+	SourceResults         []models.SourceResult
+	Warnings              []string
 }
 
 func Collect(ctx context.Context, selectors []models.APIResourceSelector) (*Snapshot, error) {
@@ -64,17 +68,26 @@ func Collect(ctx context.Context, selectors []models.APIResourceSelector) (*Snap
 	if err != nil {
 		return nil, fmt.Errorf("list Services: %w", err)
 	}
+	namespaces, err := clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list Namespaces: %w", err)
+	}
 
 	resources, warnings := collectSelectedResources(ctx, cfg, clientset, selectors)
+	deprecatedRequests, metricWarnings := collectDeprecatedAPIRequests(ctx, clientset)
+	warnings = append(warnings, metricWarnings...)
 
 	return &Snapshot{
-		ClusterVersion: version.GitVersion,
-		Deployments:    deployments.Items,
-		StatefulSets:   statefulSets.Items,
-		DaemonSets:     daemonSets.Items,
-		Services:       services.Items,
-		Resources:      resources,
-		Warnings:       warnings,
+		ClusterVersion:        version.GitVersion,
+		Deployments:           deployments.Items,
+		StatefulSets:          statefulSets.Items,
+		DaemonSets:            daemonSets.Items,
+		Services:              services.Items,
+		Namespaces:            namespaces.Items,
+		Resources:             resources,
+		DeprecatedAPIRequests: deprecatedRequests,
+		Sources:               map[string]string{},
+		Warnings:              warnings,
 	}, nil
 }
 
@@ -180,6 +193,7 @@ func resourcesFromList(items []unstructured.Unstructured, kind string, namespace
 			Name:                item.GetName(),
 			Namespaced:          namespaced,
 			ObservedAPIVersions: observedAPIVersions(item.GetManagedFields()),
+			Source:              "cluster",
 		})
 	}
 	return resources

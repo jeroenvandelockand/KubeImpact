@@ -11,15 +11,21 @@ type Summary struct {
 }
 
 type Report struct {
-	ClusterVersion string    `json:"clusterVersion"`
-	TargetVersion  string    `json:"targetVersion"`
-	GeneratedAt    time.Time `json:"generatedAt"`
+	ScanID            string    `json:"scanId"`
+	ClusterVersion    string    `json:"clusterVersion"`
+	TargetVersion     string    `json:"targetVersion"`
+	GeneratedAt       time.Time `json:"generatedAt"`
+	PolicyProfile     string    `json:"policyProfile"`
+	PolicyFingerprint string    `json:"policyFingerprint"`
 
 	Score          int            `json:"score"`
 	ScoreBreakdown ScoreBreakdown `json:"scoreBreakdown"`
 
-	Summary  Summary  `json:"summary"`
-	Warnings []string `json:"warnings"`
+	Summary      Summary          `json:"summary"`
+	Warnings     []string         `json:"warnings"`
+	Sources      []SourceResult   `json:"sources"`
+	Suppressions []Suppression    `json:"suppressions"`
+	Comparison   ReportComparison `json:"comparison"`
 
 	Findings []Finding `json:"findings"`
 

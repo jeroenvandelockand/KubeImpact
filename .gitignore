@@ -3,4 +3,5 @@ web/node_modules/
 web/dist/
 coverage.out
 kubeimpact
+data/
 *.log

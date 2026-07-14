@@ -75,6 +75,9 @@ func validate(rules *KubernetesRules) error {
 		if _, exists := ids[rule.ID]; exists {
 			return fmt.Errorf("duplicate rule ID %q", rule.ID)
 		}
+		if _, _, err := parseVersion(NormalizeVersion(rule.RemovedIn)); err != nil {
+			return fmt.Errorf("API rule %q has invalid removedIn: %w", rule.ID, err)
+		}
 		ids[rule.ID] = struct{}{}
 		return nil
 	}
@@ -82,6 +85,9 @@ func validate(rules *KubernetesRules) error {
 	for _, rule := range rules.RemovedAPIs {
 		if err := validateAPI(rule); err != nil {
 			return err
+		}
+		if NormalizeVersion(rule.RemovedIn) != rules.Version {
+			return fmt.Errorf("removed API rule %q must use removedIn %q", rule.ID, rules.Version)
 		}
 	}
 	for _, rule := range rules.DeprecatedAPIs {
@@ -96,7 +102,6 @@ func validate(rules *KubernetesRules) error {
 		if _, exists := ids[check.ID]; exists {
 			return fmt.Errorf("duplicate rule ID %q", check.ID)
 		}
-		ids[check.ID] = struct{}{}
 		ids[check.ID] = struct{}{}
 		if !models.ValidSeverity(models.Severity(check.Severity)) {
 			return fmt.Errorf("resource check %q has invalid severity %q", check.ID, check.Severity)

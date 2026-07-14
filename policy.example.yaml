@@ -1,0 +1,12 @@
+profile: restricted
+
+exclusions:
+  namespaces:
+    - "kube-system"
+  workloadLabels:
+    kubeimpact.io/exclude: "true"
+  namespaceLabels:
+    kubeimpact.io/exclude: "true"
+
+severityOverrides:
+  WLK-HOSTNET-001: high

@@ -70,3 +70,21 @@ func TestAnalyzeRejectsNonUpgradeTarget(t *testing.T) {
 		t.Fatal("Analyze() returned no error")
 	}
 }
+
+func TestAnalyzeUsesAPIServerRequestMetrics(t *testing.T) {
+	snapshot := &collector.Snapshot{
+		ClusterVersion: "v1.34.0",
+		DeprecatedAPIRequests: []models.DeprecatedAPIRequest{{
+			GroupVersion: "extensions/v1beta1", Resource: "ingresses", RemovedRelease: "1.35",
+		}, {
+			GroupVersion: "example.io/v1alpha1", Resource: "widgets", RemovedRelease: "1.37",
+		}},
+	}
+	result, err := New("1.36").Analyze(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.UpgradeImpact) != 1 || result.UpgradeImpact[0].Rule != "UPG-API-REQUEST-001" || result.UpgradeImpact[0].Source != "apiserver-metrics" {
+		t.Fatalf("UpgradeImpact = %#v", result.UpgradeImpact)
+	}
+}

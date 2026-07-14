@@ -18,18 +18,22 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/kubeimp
 
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates \
+RUN apk add --no-cache ca-certificates git helm openssh-client-default \
     && addgroup -S kubeimpact \
-    && adduser -S -D -H -G kubeimpact -u 10001 kubeimpact
+    && adduser -S -D -H -G kubeimpact -u 10001 kubeimpact \
+    && mkdir -p /data /sources /tmp \
+    && chown -R 10001:10001 /data /sources /tmp
 
 COPY --from=go-builder /out/kubeimpact /usr/local/bin/kubeimpact
 COPY --from=web-builder /web/dist /web
 
 ENV GIN_MODE=release \
     KUBEIMPACT_ADDR=:8080 \
-    KUBEIMPACT_WEB_DIR=/web
+    KUBEIMPACT_WEB_DIR=/web \
+    KUBEIMPACT_DB_PATH=/data/kubeimpact.db
 
 USER 10001:10001
+VOLUME ["/data"]
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget -q -O /dev/null http://127.0.0.1:8080/api/v1/health || exit 1

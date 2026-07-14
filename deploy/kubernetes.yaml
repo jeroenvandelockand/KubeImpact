@@ -13,11 +13,13 @@ rules:
     resources: ["deployments", "statefulsets", "daemonsets"]
     verbs: ["list"]
   - apiGroups: [""]
-    resources: ["services"]
+    resources: ["services", "namespaces"]
     verbs: ["list"]
   - apiGroups: ["storagemigration.k8s.io"]
     resources: ["storageversionmigrations"]
     verbs: ["list"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -39,6 +41,8 @@ metadata:
   namespace: kube-system
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: kubeimpact
@@ -46,17 +50,27 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: kubeimpact
+      annotations:
+        kubeimpact.io/ignore: WLK-SA-TOKEN-001
+        kubeimpact.io/ignore-reason: KubeImpact requires its dedicated read-only ServiceAccount to collect live cluster evidence.
     spec:
       serviceAccountName: kubeimpact
       automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: kubeimpact
           image: ghcr.io/your-org/kubeimpact:latest
           imagePullPolicy: IfNotPresent
+          env:
+            - name: KUBEIMPACT_DB_PATH
+              value: /data/kubeimpact.db
+            - name: KUBEIMPACT_SCAN_TIMEOUT
+              value: 2m
           ports:
             - name: http
               containerPort: 8080
@@ -80,6 +94,18 @@ spec:
             capabilities:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: kubeimpact
+        - name: tmp
+          emptyDir:
+            sizeLimit: 512Mi
 ---
 apiVersion: v1
 kind: Service
@@ -93,3 +119,15 @@ spec:
     - name: http
       port: 80
       targetPort: http
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kubeimpact
+  namespace: kube-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

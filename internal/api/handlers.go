@@ -2,90 +2,163 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
-	"strings"
-	"sync"
-	"time"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
 	"kubeimpact/internal/knowledge"
 	"kubeimpact/internal/models"
+	"kubeimpact/internal/sources"
+	"kubeimpact/internal/storage"
 )
 
-type ScanFunc func(context.Context, string) (*models.Report, error)
+const maxSourcesPerScan = 20
+
+type ScanManager interface {
+	Enqueue(context.Context, models.ScanRequest) (*models.ScanRecord, error)
+	Get(context.Context, string) (*models.ScanRecord, error)
+	Latest(context.Context) (*models.ScanRecord, error)
+	ListReports(context.Context, int) ([]models.ScanRecord, error)
+}
 
 type Server struct {
-	reports     *reportStore
-	scan        ScanFunc
-	scanTimeout time.Duration
-	scanLock    sync.Mutex
+	scans ScanManager
 }
 
-func NewServer(scan ScanFunc, scanTimeout time.Duration) *Server {
-	return &Server{
-		reports:     newReportStore(),
-		scan:        scan,
-		scanTimeout: scanTimeout,
-	}
-}
+func NewServer(scans ScanManager) *Server { return &Server{scans: scans} }
 
 func (s *Server) Health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-func (s *Server) Scan(c *gin.Context) {
-	targetVersion := knowledge.NormalizeVersion(c.DefaultQuery("targetVersion", "1.36"))
-	if !knowledge.IsSupportedVersion(targetVersion) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":             "unsupported targetVersion",
-			"supportedVersions": knowledge.SupportedVersions(),
-		})
+func (s *Server) CreateScan(c *gin.Context) {
+	request := models.ScanRequest{}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var decoded *models.ScanRequest
+	decodeErr := decoder.Decode(&decoded)
+	if decodeErr != nil && !errors.Is(decodeErr, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid scan request: " + decodeErr.Error()})
 		return
 	}
-	if !s.scanLock.TryLock() {
-		c.JSON(http.StatusConflict, gin.H{"error": "a cluster scan is already in progress"})
+	if decoded != nil {
+		request = *decoded
+	} else if !errors.Is(decodeErr, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "scan request must be a JSON object"})
 		return
 	}
-	defer s.scanLock.Unlock()
-
-	ctx, cancel := context.WithTimeout(c.Request.Context(), s.scanTimeout)
-	defer cancel()
-
-	report, err := s.scan(ctx, targetVersion)
-	if err != nil {
-		log.Printf("cluster scan failed: %v", err)
-		status := http.StatusInternalServerError
-		message := "cluster scan failed"
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			status = http.StatusGatewayTimeout
-			message = "cluster scan timed out"
-		} else if strings.Contains(err.Error(), "must be newer than current version") {
-			status = http.StatusUnprocessableEntity
-			message = err.Error()
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "scan request must contain one JSON object"})
+		return
+	}
+	if queryTarget := c.Query("targetVersion"); request.TargetVersion == "" && queryTarget != "" {
+		request.TargetVersion = queryTarget
+	}
+	if request.TargetVersion == "" {
+		request.TargetVersion = "1.36"
+	}
+	request.TargetVersion = knowledge.NormalizeVersion(request.TargetVersion)
+	if !knowledge.IsSupportedVersion(request.TargetVersion) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported targetVersion", "supportedVersions": knowledge.SupportedVersions()})
+		return
+	}
+	if !request.ClusterEnabled() && len(request.Sources) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "scan must include the cluster or at least one source"})
+		return
+	}
+	if !request.ClusterEnabled() {
+		if request.CurrentVersion == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "currentVersion is required for a manifest-only scan"})
+			return
 		}
-		c.JSON(status, gin.H{"error": message})
+		request.CurrentVersion = knowledge.NormalizeVersion(request.CurrentVersion)
+		if _, err := knowledge.LoadForUpgrade(request.CurrentVersion, request.TargetVersion); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid manifest-only upgrade path: " + err.Error()})
+			return
+		}
+	}
+	if len(request.Sources) > maxSourcesPerScan {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "a scan may contain at most 20 sources"})
 		return
 	}
-	if report == nil {
-		log.Print("cluster scan returned a nil report")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "cluster scan failed"})
-		return
+	seenSources := make(map[string]struct{}, len(request.Sources))
+	for index, source := range request.Sources {
+		if err := sources.ValidateSpec(source); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid source " + strconv.Itoa(index+1) + ": " + err.Error()})
+			return
+		}
+		encoded, _ := json.Marshal(source)
+		key := string(encoded)
+		if _, duplicate := seenSources[key]; duplicate {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "duplicate source at position " + strconv.Itoa(index+1)})
+			return
+		}
+		seenSources[key] = struct{}{}
 	}
 
-	s.reports.Set(report)
+	record, err := s.scans.Enqueue(c.Request.Context(), request)
+	if err != nil {
+		log.Printf("queue scan: %v", err)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "scan could not be queued"})
+		return
+	}
+	c.Header("Location", "/api/v1/scans/"+record.ID)
 	c.Header("Cache-Control", "no-store")
-	c.JSON(http.StatusOK, report)
+	c.JSON(http.StatusAccepted, record)
+}
+
+func (s *Server) GetScan(c *gin.Context) {
+	record, err := s.scans.Get(c.Request.Context(), c.Param("id"))
+	if errors.Is(err, storage.ErrNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "scan not found"})
+		return
+	}
+	if err != nil {
+		log.Printf("get scan: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "scan could not be read"})
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, record)
 }
 
 func (s *Server) LatestReport(c *gin.Context) {
-	report, ok := s.reports.Get()
-	if !ok {
+	record, err := s.scans.Latest(c.Request.Context())
+	if errors.Is(err, storage.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "no completed scan is available"})
 		return
 	}
+	if err != nil {
+		log.Printf("get latest report: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "latest report could not be read"})
+		return
+	}
 	c.Header("Cache-Control", "no-store")
-	c.JSON(http.StatusOK, report)
+	c.JSON(http.StatusOK, record.Report)
+}
+
+func (s *Server) ListReports(c *gin.Context) {
+	limit := 20
+	if value := c.Query("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be between 1 and 100"})
+			return
+		}
+		limit = parsed
+	}
+	records, err := s.scans.ListReports(c.Request.Context(), limit)
+	if err != nil {
+		log.Printf("list reports: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "reports could not be read"})
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"reports": records})
 }

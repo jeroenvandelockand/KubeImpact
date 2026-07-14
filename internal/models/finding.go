@@ -27,11 +27,13 @@ type Finding struct {
 
 	Category string `json:"category"`
 
-	Namespace string `json:"namespace"`
-	Kind      string `json:"kind"`
-	Name      string `json:"name"`
-	Container string `json:"container,omitempty"`
-	FieldPath string `json:"fieldPath,omitempty"`
+	Namespace string       `json:"namespace"`
+	Kind      string       `json:"kind"`
+	Name      string       `json:"name"`
+	Container string       `json:"container,omitempty"`
+	FieldPath string       `json:"fieldPath,omitempty"`
+	Source    string       `json:"source,omitempty"`
+	Change    ChangeStatus `json:"change,omitempty"`
 
 	CurrentValue  string `json:"currentValue,omitempty"`
 	ExpectedValue string `json:"expectedValue,omitempty"`
@@ -39,4 +41,15 @@ type Finding struct {
 	Message          string `json:"message"`
 	Recommendation   string `json:"recommendation,omitempty"`
 	DocumentationURL string `json:"documentationUrl,omitempty"`
+}
+
+type Suppression struct {
+	RuleID      string `json:"ruleId"`
+	Namespace   string `json:"namespace"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name"`
+	Container   string `json:"container,omitempty"`
+	Source      string `json:"source,omitempty"`
+	Reason      string `json:"reason"`
+	Fingerprint string `json:"fingerprint"`
 }

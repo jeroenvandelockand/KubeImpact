@@ -54,6 +54,16 @@ func TestDecodeRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsRemovedAPIRuleInWrongRelease(t *testing.T) {
+	rules := &KubernetesRules{Version: "1.35", RemovedAPIs: []APIRule{{
+		ID: "RULE", GroupVersion: "example.io/v1alpha1", Kind: "Widget", RemovedIn: "1.36",
+		Message: "removed", Recommendation: "migrate", DocumentationURL: "https://example.com",
+	}}}
+	if err := validate(rules); err == nil || !strings.Contains(err.Error(), "removedIn") {
+		t.Fatalf("validate() error = %v", err)
+	}
+}
+
 func TestNormalizeVersion(t *testing.T) {
 	if got := NormalizeVersion(" v1.36.2+k3s1 "); got != "1.36" {
 		t.Fatalf("NormalizeVersion() = %q", got)
