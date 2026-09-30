@@ -60,3 +60,5 @@ make destroy         # delete only the named Kind cluster and marked runtime dir
 Use `KUBEIMPACT_PORT` to select another local port, `CLUSTER_NAME` to select a safe Kind cluster name, and `KUBEIMPACT_SCAN_WAIT_SECONDS` / `KUBEIMPACT_ROLLOUT_WAIT_SECONDS` to adjust bounded waits.
 
 The fixture is a ConfigMap volume because the demo needs a portable, read-only source mount without binding the repository into the Kind node. KubeImpact analyzes its deliberately synthetic component and kubeadm configuration as source documents and never submits those documents to the Kubernetes API.
+
+The demo imports its locally built image directly into every Kind node with containerd's `ctr` command. It does not use `kind load docker-image`, because older Kind clients only understand containerd configuration versions 2 and 3 while the pinned Kubernetes 1.36 node image uses version 4. The direct import works with either format and is verified before the deployment is applied.

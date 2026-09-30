@@ -58,6 +58,17 @@ if grep -Fq 'sha256sum' "${REPO_ROOT}/scripts/doctor.sh"; then
   fail "The normal prerequisite check must not require the CI-only checksum tool"
 fi
 
+if grep -Eq '^[[:space:]]*kind[[:space:]]+load[[:space:]]+docker-image' "${REPO_ROOT}/scripts/build-image.sh"; then
+  fail "The demo image loader must not parse containerd v4 through kind load docker-image"
+fi
+if grep -Eq '(^|[[:space:]])(mapfile|readarray)([[:space:]]|$)' "${REPO_ROOT}/scripts/build-image.sh"; then
+  fail "The demo image loader must remain compatible with macOS Bash 3.2"
+fi
+grep -Fq 'ctr --namespace k8s.io images import -' "${REPO_ROOT}/scripts/build-image.sh" \
+  || fail "The demo image loader must import directly into Kind containerd"
+grep -Fq 'ctr --namespace k8s.io images list --quiet' "${REPO_ROOT}/scripts/build-image.sh" \
+  || fail "The demo image loader must verify every containerd import"
+
 awk '
   /scripts\/reset-fixture\.sh/ { reset = NR }
   /scripts\/scan\.sh" initial/ { scan = NR }

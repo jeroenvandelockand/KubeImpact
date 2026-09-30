@@ -58,6 +58,8 @@ make destroy
 
 See [the demo guide](docs/demo.md) for the workflow and operating commands.
 
+The locally built `kubeimpact:demo` image is saved once and imported directly into the `k8s.io` containerd namespace on every Kind node. This deliberately avoids `kind load docker-image`: older Kind clients cannot parse the containerd configuration version 4 used by newer Kubernetes node images and otherwise fail with `unknown containerd config version: 4`.
+
 ## Requirements
 
 - Go 1.26.4 or newer
