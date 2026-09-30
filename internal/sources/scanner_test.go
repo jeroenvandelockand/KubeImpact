@@ -62,6 +62,129 @@ metadata:
 	}
 }
 
+func TestDirectoryScanAcceptsKubeadmConfigurationWithoutObjectMeta(t *testing.T) {
+	root := t.TempDir()
+	manifest := `apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+kubernetesVersion: v1.36.0
+`
+	if err := os.WriteFile(filepath.Join(root, "kubeadm.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	scanner, err := New(Config{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := scanner.Scan(context.Background(), []models.SourceSpec{{Type: models.SourceDirectory, Path: "."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Resources) != 1 || snapshot.Resources[0].Name != "ClusterConfiguration" || snapshot.Resources[0].Object["kubernetesVersion"] != "v1.36.0" {
+		t.Fatalf("resources = %#v", snapshot.Resources)
+	}
+}
+
+func TestDirectoryScanKeepsStableIdentityAcrossProjectedVolumeSymlinks(t *testing.T) {
+	root := t.TempDir()
+	versionDirectory := filepath.Join(root, "..2026_09_30_13_36_55.123456")
+	upgradeDirectory := filepath.Join(versionDirectory, "upgrade")
+	if err := os.MkdirAll(upgradeDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: fixture}\n"
+	if err := os.WriteFile(filepath.Join(upgradeDirectory, "manifests.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Base(versionDirectory), filepath.Join(root, "..data")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..data", "upgrade"), filepath.Join(root, "upgrade")); err != nil {
+		t.Fatal(err)
+	}
+
+	scanner, err := New(Config{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := scanner.Scan(context.Background(), []models.SourceSpec{{Type: models.SourceDirectory, Path: "upgrade"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.SourceResults) != 1 || snapshot.SourceResults[0].Location != "upgrade" {
+		t.Fatalf("source results = %#v", snapshot.SourceResults)
+	}
+	if len(snapshot.Resources) != 1 || snapshot.Resources[0].Source != "directory:upgrade#manifests.yaml" {
+		t.Fatalf("resources = %#v", snapshot.Resources)
+	}
+}
+
+func TestDirectoryScanAcceptsCloudControllerManagerConfigurationWithoutObjectMeta(t *testing.T) {
+	root := t.TempDir()
+	manifest := `apiVersion: cloudcontrollermanager.config.k8s.io/v1alpha1
+kind: CloudControllerManagerConfiguration
+kubeCloudShared:
+  nodeMonitorPeriod: 5s
+`
+	if err := os.WriteFile(filepath.Join(root, "cloud-controller-manager.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	scanner, err := New(Config{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := scanner.Scan(context.Background(), []models.SourceSpec{{Type: models.SourceDirectory, Path: "."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Resources) != 1 || snapshot.Resources[0].Name != "CloudControllerManagerConfiguration" {
+		t.Fatalf("resources = %#v", snapshot.Resources)
+	}
+	shared, ok := snapshot.Resources[0].Object["kubeCloudShared"].(map[string]any)
+	if !ok || shared["nodeMonitorPeriod"] != "5s" {
+		t.Fatalf("cloud-controller-manager object = %#v", snapshot.Resources[0].Object)
+	}
+}
+
+func TestDirectoryScanAcceptsSchedulerConfigurationWithoutObjectMeta(t *testing.T) {
+	root := t.TempDir()
+	manifest := `apiVersion: kubescheduler.config.k8s.io/v1
+kind: KubeSchedulerConfiguration
+featureGates:
+  GangScheduling: true
+`
+	if err := os.WriteFile(filepath.Join(root, "kube-scheduler.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	scanner, err := New(Config{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := scanner.Scan(context.Background(), []models.SourceSpec{{Type: models.SourceDirectory, Path: "."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Resources) != 1 || snapshot.Resources[0].Name != "KubeSchedulerConfiguration" {
+		t.Fatalf("resources = %#v", snapshot.Resources)
+	}
+}
+
+func TestDirectoryScanStillRejectsAPIResourceWithoutObjectMeta(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "service.yaml"), []byte("apiVersion: v1\nkind: Service\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := New(Config{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(context.Background(), []models.SourceSpec{{Type: models.SourceDirectory, Path: "."}}); err == nil {
+		t.Fatal("scan accepted API resource without metadata")
+	}
+}
+
 func TestDirectoryScanRejectsEscapesAndWarnsForTemplates(t *testing.T) {
 	root := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.yaml")
@@ -140,6 +263,38 @@ func TestHelmSourceUsesRenderedOutput(t *testing.T) {
 	}
 	if location := snapshot.SourceResults[0].Location; !strings.Contains(location, "release=edge") || !strings.Contains(location, "namespace=gateway") {
 		t.Fatalf("Helm source location = %q", location)
+	}
+}
+
+func TestHelmSourceRendersForUpgradeTarget(t *testing.T) {
+	root := t.TempDir()
+	chart := filepath.Join(root, "chart")
+	if err := os.Mkdir(chart, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(root, "rendered.yaml")
+	if err := os.WriteFile(fixture, []byte("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: rendered}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	argsFile := filepath.Join(root, "args")
+	helm := filepath.Join(root, "helm-test")
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$@\" > %q\ncat %q\n", argsFile, fixture)
+	if err := os.WriteFile(helm, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := New(Config{Root: root, HelmBinary: helm})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.ScanForVersion(context.Background(), []models.SourceSpec{{Type: models.SourceHelm, Path: "chart"}}, "1.37"); err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "--kube-version\n1.37.0\n") {
+		t.Fatalf("helm args = %q", args)
 	}
 }
 

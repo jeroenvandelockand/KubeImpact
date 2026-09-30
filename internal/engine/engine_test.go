@@ -27,7 +27,7 @@ func TestAnalyzeIncludesUpgradeImpactsInSummaryAndScore(t *testing.T) {
 	if report.Summary.Medium != 1 || report.Score != 95 || report.ScoreBreakdown.Penalty != 5 {
 		t.Fatalf("report summary/score = %#v / %d / %#v", report.Summary, report.Score, report.ScoreBreakdown)
 	}
-	if len(report.Warnings) != 1 || report.GeneratedAt.IsZero() {
+	if len(report.Warnings) != 1 || report.EvidenceStatus != models.EvidencePartial || report.RuleFingerprint == "" || report.GeneratedAt.IsZero() {
 		t.Fatalf("report metadata = %#v", report)
 	}
 }

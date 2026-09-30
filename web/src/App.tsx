@@ -48,13 +48,15 @@ function formatDateTime(value?: string) {
   }).format(new Date(value));
 }
 
-function riskLabel(score: number) {
+function riskLabel(score: number, evidenceStatus: Report["evidenceStatus"]) {
+  if (score >= 90 && evidenceStatus !== "complete") return "Evidence incomplete";
   if (score >= 90) return "Ready";
   if (score >= 70) return "Review required";
   return "Action required";
 }
 
-function riskTone(score: number) {
+function riskTone(score: number, evidenceStatus: Report["evidenceStatus"]) {
+  if (score >= 90 && evidenceStatus !== "complete") return "warning";
   if (score >= 90) return "success";
   if (score >= 70) return "warning";
   return "danger";
@@ -99,9 +101,9 @@ function StatusBadge({ status }: { status: ScanRecord["status"] }) {
 }
 
 export default function App() {
-  const [targetVersion, setTargetVersion] = useState("1.36");
+  const [targetVersion, setTargetVersion] = useState("1.37");
   const [includeCluster, setIncludeCluster] = useState(true);
-  const [currentVersion, setCurrentVersion] = useState("1.35");
+  const [currentVersion, setCurrentVersion] = useState("1.36");
   const [sources, setSources] = useState<EditableSource[]>([]);
   const [data, setData] = useState<Report | null>(null);
   const [history, setHistory] = useState<ScanRecord[]>([]);
@@ -269,11 +271,11 @@ export default function App() {
               <div className="breadcrumb">Reports <span>/</span> {data.scanId.slice(0, 8)}</div>
               <div className="report-title-row">
                 <h1>Kubernetes {data.clusterVersion} to {data.targetVersion}</h1>
-                <span className={`readiness-label tone-${riskTone(data.score)}`}><span className="status-dot" />{riskLabel(data.score)}</span>
+                <span className={`readiness-label tone-${riskTone(data.score, data.evidenceStatus)}`}><span className="status-dot" />{riskLabel(data.score, data.evidenceStatus)}</span>
               </div>
               <p>Policy profile: {data.policyProfile} · Generated {formatDateTime(data.generatedAt)}</p>
             </div>
-            <div className={`context-score score-${riskTone(data.score)}`}>
+            <div className={`context-score score-${riskTone(data.score, data.evidenceStatus)}`}>
               <div className="context-score-label"><span>Readiness score</span><span className="status-dot" /></div>
               <strong>{data.score}<small>/100</small></strong>
               <div className="score-track" aria-hidden="true"><span style={{ width: `${data.score}%` }} /></div>
@@ -352,7 +354,7 @@ export default function App() {
                     <select value={targetVersion} disabled={scanning} onChange={(event) => setTargetVersion(event.target.value)}>
                       <option value="1.35">1.35</option>
                       <option value="1.36">1.36</option>
-                      <option value="1.37">1.37 preview</option>
+                      <option value="1.37">1.37</option>
                     </select>
                   </label>
                 </div>
@@ -572,7 +574,7 @@ function Overview({ data, history, onTabChange, onOpenReport }: { data: Report; 
   return (
     <div className="overview-stack">
       <section className="metric-grid" aria-label="Report summary">
-        <MetricCard label="Readiness" value={`${data.score}/100`} detail={riskLabel(data.score)} tone={riskTone(data.score)} />
+        <MetricCard label="Readiness" value={`${data.score}/100`} detail={riskLabel(data.score, data.evidenceStatus)} tone={riskTone(data.score, data.evidenceStatus)} />
         <MetricCard label="Critical & high" value={String(highPriority)} detail={highPriority === 0 ? "No priority blockers" : "Require attention"} tone={highPriority === 0 ? "success" : "danger"} />
         <MetricCard label="Upgrade path" value={`${data.clusterVersion} → ${data.targetVersion}`} detail={`Policy: ${data.policyProfile}`} />
         <MetricCard label="Evidence coverage" value={`${data.sources.length} source${data.sources.length === 1 ? "" : "s"}`} detail={`${resources} resources inspected`} />

@@ -61,7 +61,7 @@ func (s *Server) CreateScan(c *gin.Context) {
 		request.TargetVersion = queryTarget
 	}
 	if request.TargetVersion == "" {
-		request.TargetVersion = "1.36"
+		request.TargetVersion = "1.37"
 	}
 	request.TargetVersion = knowledge.NormalizeVersion(request.TargetVersion)
 	if !knowledge.IsSupportedVersion(request.TargetVersion) {

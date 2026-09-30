@@ -1,6 +1,8 @@
 package knowledge
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -68,22 +70,27 @@ func validate(rules *KubernetesRules) error {
 	}
 
 	ids := make(map[string]struct{})
-	validateAPI := func(rule APIRule) error {
-		if rule.ID == "" || rule.GroupVersion == "" || rule.Kind == "" || rule.RemovedIn == "" || rule.Message == "" || rule.Recommendation == "" || rule.DocumentationURL == "" {
+	validateAPI := func(rule APIRule, removal bool) error {
+		if rule.ID == "" || rule.GroupVersion == "" || rule.Kind == "" || rule.Message == "" || rule.Recommendation == "" || rule.DocumentationURL == "" {
 			return fmt.Errorf("API rule %q has missing required fields", rule.ID)
 		}
 		if _, exists := ids[rule.ID]; exists {
 			return fmt.Errorf("duplicate rule ID %q", rule.ID)
 		}
-		if _, _, err := parseVersion(NormalizeVersion(rule.RemovedIn)); err != nil {
-			return fmt.Errorf("API rule %q has invalid removedIn: %w", rule.ID, err)
+		if removal && rule.RemovedIn == "" {
+			return fmt.Errorf("removed API rule %q requires removedIn", rule.ID)
+		}
+		if rule.RemovedIn != "" {
+			if _, _, err := parseVersion(NormalizeVersion(rule.RemovedIn)); err != nil {
+				return fmt.Errorf("API rule %q has invalid removedIn: %w", rule.ID, err)
+			}
 		}
 		ids[rule.ID] = struct{}{}
 		return nil
 	}
 
 	for _, rule := range rules.RemovedAPIs {
-		if err := validateAPI(rule); err != nil {
+		if err := validateAPI(rule, true); err != nil {
 			return err
 		}
 		if NormalizeVersion(rule.RemovedIn) != rules.Version {
@@ -91,7 +98,7 @@ func validate(rules *KubernetesRules) error {
 		}
 	}
 	for _, rule := range rules.DeprecatedAPIs {
-		if err := validateAPI(rule); err != nil {
+		if err := validateAPI(rule, false); err != nil {
 			return err
 		}
 	}
@@ -107,7 +114,7 @@ func validate(rules *KubernetesRules) error {
 			return fmt.Errorf("resource check %q has invalid severity %q", check.ID, check.Severity)
 		}
 		switch check.Name {
-		case "serviceExternalIPs":
+		case "serviceExternalIPs", "kubeletEventRecordQPSZero", "selinuxVolumeConflict", "kubeProxyIPVS", "kubeProxyModeUnset", "kubeDNS", "nodeLogsRBAC", "staticPodAPIReference", "kubeletCgroupV1Override", "cloudNodeMonitorPeriod", "lockedFeatureGate", "removedFeatureGate", "removedComponentFlag":
 		default:
 			return fmt.Errorf("resource check %q uses unknown evaluator %q", check.ID, check.Name)
 		}
@@ -199,6 +206,25 @@ func LoadForUpgrade(currentVersion, targetVersion string) ([]*KubernetesRules, e
 	return rules, nil
 }
 
+// UpgradeFingerprint identifies the exact ordered rule bundle used for an
+// upgrade path. Persisting it prevents comparisons across application versions
+// from treating rule additions or removals as workload changes.
+func UpgradeFingerprint(currentVersion, targetVersion string) (string, error) {
+	ruleSets, err := LoadForUpgrade(currentVersion, targetVersion)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	for _, rules := range ruleSets {
+		data, marshalErr := yaml.Marshal(rules)
+		if marshalErr != nil {
+			return "", fmt.Errorf("encode Kubernetes %s rules for fingerprint: %w", rules.Version, marshalErr)
+		}
+		_, _ = hash.Write(data)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
 func ResourceSelectorsThrough(targetVersion string) ([]models.APIResourceSelector, error) {
 	targetMajor, targetMinor, err := parseVersion(NormalizeVersion(targetVersion))
 	if err != nil {
@@ -220,6 +246,9 @@ func ResourceSelectorsThrough(targetVersion string) ([]models.APIResourceSelecto
 			return nil, loadErr
 		}
 		for _, rule := range append(append([]APIRule{}, rules.RemovedAPIs...), rules.DeprecatedAPIs...) {
+			if rule.SourceOnly {
+				continue
+			}
 			selector := models.APIResourceSelector{GroupVersion: rule.GroupVersion, Kind: rule.Kind}
 			if _, exists := seen[selector]; exists {
 				continue

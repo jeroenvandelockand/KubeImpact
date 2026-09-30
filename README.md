@@ -43,7 +43,20 @@ The restricted profile includes baseline and also checks:
 
 Deployments, StatefulSets, DaemonSets, regular containers, init containers, and ephemeral containers are covered. Each signal includes a stable fingerprint, evidence source, resource/container identity, field path, current and expected values, remediation, and documentation.
 
-Upgrade analysis currently includes the Kubernetes 1.35 `StorageVersionMigration` v1alpha1 removal, the Kubernetes 1.36 Service `spec.externalIPs` deprecation, exact manifest `apiVersion` evidence, managed-fields fallback evidence, and API-server deprecated-request metrics.
+Upgrade analysis covers the complete rule path from Kubernetes 1.35 through 1.37. The 1.37 bundle includes removed and deprecated APIs, kubeadm v1beta3 source configuration, SELinux volume-conflict evidence, static Pod API references, kube-proxy and kube-dns migration signals, changed component configuration, removed and locked feature gates, and removed component flags. See [Kubernetes 1.37 coverage](docs/kubernetes-1.37.md) for the rule-by-rule evidence model and explicit blind spots.
+
+## Reproducible 1.36 to 1.37 demo
+
+The repository includes a digest-pinned Kind demo that proves asynchronous detection, remediation, resolved-signal comparison, and SQLite persistence across a Pod replacement:
+
+```bash
+make doctor
+make demo
+make test
+make destroy
+```
+
+See [the demo guide](docs/demo.md) for the workflow and operating commands.
 
 ## Requirements
 
@@ -85,7 +98,7 @@ Vite proxies `/api` to `http://localhost:8080`. Open `http://localhost:5173`.
 curl -X POST http://localhost:8080/api/v1/scans \
   -H 'Content-Type: application/json' \
   -d '{
-    "targetVersion": "1.36",
+    "targetVersion": "1.37",
     "includeCluster": true
   }'
 ```
@@ -97,7 +110,7 @@ The response is `202 Accepted`:
   "id": "de8cfeab-6fb9-4d95-a305-e5be84d18f54",
   "status": "pending",
   "request": {
-    "targetVersion": "1.36",
+    "targetVersion": "1.37",
     "includeCluster": true
   },
   "createdAt": "2026-07-14T14:00:00Z"
@@ -131,7 +144,7 @@ Local paths must resolve beneath `KUBEIMPACT_SOURCE_ROOT`:
 curl -X POST http://localhost:8080/api/v1/scans \
   -H 'Content-Type: application/json' \
   -d '{
-    "targetVersion": "1.36",
+    "targetVersion": "1.37",
     "includeCluster": true,
     "sources": [
       {"type": "directory", "path": "payments/manifests"}
@@ -139,7 +152,7 @@ curl -X POST http://localhost:8080/api/v1/scans \
   }'
 ```
 
-A path may identify one YAML/JSON file or a directory. Directories are scanned recursively with deterministic ordering. `.git`, `node_modules`, `vendor`, and `.terraform` are ignored. Symlink/path escapes, oversized files, excessive file counts, malformed documents, and resources without `apiVersion`, `kind`, or a name fail the scan instead of producing a false-clean result. A request may include at most 20 distinct sources.
+A path may identify one YAML/JSON file or a directory. Directories are scanned recursively with deterministic ordering. `.git`, `node_modules`, `vendor`, and `.terraform` are ignored. Symlink/path escapes, oversized files, excessive file counts, malformed documents, and API resources without `apiVersion`, `kind`, or a name fail the scan instead of producing a false-clean result. Metadata-free kubeadm and recognized component-configuration documents are accepted. A request may include at most 20 distinct sources.
 
 Files that fail decoding because they contain unrendered `{{ ... }}` content are skipped with a report warning; valid documents before the templated content are retained. Literal template text inside otherwise valid YAML remains analyzable. Configure a Helm source to render the complete file.
 
@@ -147,7 +160,7 @@ Files that fail decoding because they contain unrendered `{{ ... }}` content are
 
 ```json
 {
-  "targetVersion": "1.36",
+  "targetVersion": "1.37",
   "includeCluster": true,
   "sources": [
     {
@@ -169,7 +182,7 @@ Remote Git is disabled until `KUBEIMPACT_GIT_HOSTS` is configured. Only `https:/
 
 ```json
 {
-  "targetVersion": "1.36",
+  "targetVersion": "1.37",
   "includeCluster": true,
   "sources": [
     {
@@ -202,8 +215,8 @@ When cluster collection is disabled, `currentVersion` is required so KubeImpact 
 
 ```json
 {
-  "currentVersion": "1.35",
-  "targetVersion": "1.36",
+  "currentVersion": "1.36",
+  "targetVersion": "1.37",
   "includeCluster": false,
   "sources": [
     {"type": "directory", "path": "manifests"}
@@ -295,7 +308,7 @@ kubectl -n kube-system port-forward service/kubeimpact 8080:80
 
 The manifest includes:
 
-- Read-only RBAC for workloads, Services, Namespaces, the currently modeled removed API, and `/metrics`
+- Read-only RBAC for workloads, Services, Namespaces, Events, ClusterRoles, modeled upgrade APIs, and `/metrics`
 - A non-root, read-only-root-filesystem container
 - A writable, 512 MiB-capped temporary `emptyDir` for Git clones
 - A 1 GiB persistent volume claim for SQLite
@@ -311,13 +324,13 @@ Versioned rules live under [`rules/kubernetes`](rules/kubernetes) and are embedd
 
 Upgrade analysis loads every rule file between the current and requested target minor versions. Upgrading from 1.34 to 1.36 evaluates both 1.35 and 1.36.
 
-Kubernetes 1.37 is a prerelease target and intentionally contains only verified, machine-detectable entries.
+Kubernetes 1.37 contains verified, machine-detectable rules derived from the final v1.37.1 changelog and the associated upstream implementations. Helm sources are rendered with the requested target passed as `--kube-version`, so target-dependent chart branches are evaluated correctly.
 
 ## Scoring and comparisons
 
 Reports start at 100 and apply severity weights of 25/10/5/2 for critical/high/medium/low. Penalties are capped per severity at 50/30/15/5 so cluster size cannot create an unbounded penalty. `scoreBreakdown` exposes every applied cap and penalty.
 
-Comparison uses stable signal fingerprints and only a compatible previous scan. A change in target, complete policy configuration, cluster inclusion, current version for manifest-only scans, or source configuration starts a new comparison baseline rather than incorrectly reporting everything resolved.
+Comparison uses stable signal fingerprints and only a compatible previous scan. A change in target, complete policy configuration, embedded rule bundle, cluster inclusion, current version for manifest-only scans, or source configuration starts a new comparison baseline rather than incorrectly reporting everything resolved.
 
 Treat the score as prioritization help, not an upgrade guarantee.
 
@@ -327,8 +340,11 @@ Treat the score as prioritization help, not an upgrade guarantee.
 - Git branch/tag shallow clones are supported; arbitrary commit-only refs may require a branch or tag.
 - API-server metrics describe API use since that API server process started and depend on `/metrics` RBAC.
 - Managed-fields evidence can be incomplete; source manifests and request metrics are stronger signals.
+- Component configuration stored inside ConfigMap data, node-local files, systemd units, and shell/CI commands is not recursively decoded. Scan the original component configuration or rendered source directly.
+- Kubernetes 1.37 changes outside the Kubernetes object API need external evidence: Metrics API client calls, DRA plugin gRPC versions, SELinux component metrics, cAdvisor metric consumers, and `kubectl run -f` usage are documented but not inferred.
+- The `nodes/logs` check identifies ClusterRoles for review; it does not decide whether the bound subjects are trusted.
 - Kustomize rendering is not implemented yet. Render Kustomize output to a directory/file source as a workaround.
-- The rule corpus intentionally includes only verified machine-detectable changes; operators must still review official release notes.
+- Operators must still review official release notes and component-specific upgrade guidance. `evidenceStatus: partial` and report warnings identify scans that lack optional evidence.
 
 ## Development checks
 

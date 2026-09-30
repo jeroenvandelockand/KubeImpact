@@ -12,6 +12,8 @@ type APIRule struct {
 	GroupVersion     string `yaml:"groupVersion"`
 	Kind             string `yaml:"kind"`
 	RemovedIn        string `yaml:"removedIn"`
+	SourceOnly       bool   `yaml:"sourceOnly"`
+	MatchPresence    bool   `yaml:"matchPresence"`
 	Message          string `yaml:"message"`
 	Recommendation   string `yaml:"recommendation"`
 	DocumentationURL string `yaml:"documentationURL"`

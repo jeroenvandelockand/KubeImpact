@@ -159,7 +159,7 @@ func (m *Manager) execute(parent context.Context, id string) {
 	}
 
 	report.ScanID = id
-	previous := m.previousComparable(record.Request, report.PolicyProfile, report.PolicyFingerprint)
+	previous := m.previousComparable(record.Request, report.PolicyProfile, report.PolicyFingerprint, report.RuleFingerprint)
 	ApplyComparison(report, previous)
 	completeCtx, cancelComplete := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelComplete()
@@ -168,7 +168,7 @@ func (m *Manager) execute(parent context.Context, id string) {
 	}
 }
 
-func (m *Manager) previousComparable(request models.ScanRequest, profile, policyFingerprint string) *models.ScanRecord {
+func (m *Manager) previousComparable(request models.ScanRequest, profile, policyFingerprint, ruleFingerprint string) *models.ScanRecord {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	records, err := m.repository.ListReports(ctx, 100)
@@ -177,7 +177,7 @@ func (m *Manager) previousComparable(request models.ScanRequest, profile, policy
 		return nil
 	}
 	for i := range records {
-		if comparableRequests(request, records[i].Request) && records[i].Report != nil && records[i].Report.PolicyProfile == profile && records[i].Report.PolicyFingerprint == policyFingerprint {
+		if comparableRequests(request, records[i].Request) && records[i].Report != nil && records[i].Report.PolicyProfile == profile && records[i].Report.PolicyFingerprint == policyFingerprint && records[i].Report.RuleFingerprint == ruleFingerprint {
 			return &records[i]
 		}
 	}

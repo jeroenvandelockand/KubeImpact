@@ -1,5 +1,6 @@
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
 export type ChangeStatus = "new" | "unchanged" | "resolved";
+export type EvidenceStatus = "complete" | "partial";
 
 export interface Finding {
   id: string;
@@ -116,6 +117,8 @@ export interface Report {
   generatedAt: string;
   policyProfile: string;
   policyFingerprint: string;
+  ruleFingerprint: string;
+  evidenceStatus: EvidenceStatus;
   score: number;
   scoreBreakdown: ScoreBreakdown;
   summary: Summary;

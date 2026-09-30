@@ -20,6 +20,10 @@ func Analyze(ctx context.Context, snapshot *collector.Snapshot, targetVersion st
 	if !knowledge.IsSupportedVersion(targetVersion) {
 		return nil, fmt.Errorf("unsupported Kubernetes target version %q", knowledge.NormalizeVersion(targetVersion))
 	}
+	ruleFingerprint, err := knowledge.UpgradeFingerprint(snapshot.ClusterVersion, targetVersion)
+	if err != nil {
+		return nil, fmt.Errorf("resolve upgrade rule bundle: %w", err)
+	}
 
 	allFindings := make([]models.Finding, 0)
 	allUpgradeImpacts := make([]models.UpgradeImpact, 0)
@@ -46,6 +50,10 @@ func Analyze(ctx context.Context, snapshot *collector.Snapshot, targetVersion st
 	allFindings = uniqueFindings(allFindings)
 	allUpgradeImpacts = uniqueUpgradeImpacts(allUpgradeImpacts)
 	allSuppressions = uniqueSuppressions(allSuppressions)
+	evidenceStatus := models.EvidenceComplete
+	if len(snapshot.Warnings) > 0 {
+		evidenceStatus = models.EvidencePartial
+	}
 
 	score, scoreBreakdown := CalculateScore(allFindings, allUpgradeImpacts)
 	return &models.Report{
@@ -54,6 +62,8 @@ func Analyze(ctx context.Context, snapshot *collector.Snapshot, targetVersion st
 		GeneratedAt:       time.Now().UTC(),
 		PolicyProfile:     string(selectedPolicy.Profile),
 		PolicyFingerprint: selectedPolicy.Fingerprint(),
+		RuleFingerprint:   ruleFingerprint,
+		EvidenceStatus:    evidenceStatus,
 		Score:             score,
 		ScoreBreakdown:    scoreBreakdown,
 		Summary:           BuildSummary(allFindings, allUpgradeImpacts),

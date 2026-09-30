@@ -56,6 +56,8 @@ func Merge(destination, source *Snapshot) {
 	destination.DaemonSets = append(destination.DaemonSets, source.DaemonSets...)
 	destination.Services = append(destination.Services, source.Services...)
 	destination.Namespaces = append(destination.Namespaces, source.Namespaces...)
+	destination.Events = append(destination.Events, source.Events...)
+	destination.Pods = append(destination.Pods, source.Pods...)
 	destination.Resources = append(destination.Resources, source.Resources...)
 	destination.DeprecatedAPIRequests = append(destination.DeprecatedAPIRequests, source.DeprecatedAPIRequests...)
 	destination.SourceResults = append(destination.SourceResults, source.SourceResults...)

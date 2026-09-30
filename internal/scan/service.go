@@ -16,7 +16,7 @@ import (
 )
 
 type Collector func(context.Context, []models.APIResourceSelector) (*collector.Snapshot, error)
-type SourceScanner func(context.Context, []models.SourceSpec) (*collector.Snapshot, error)
+type SourceScanner func(context.Context, []models.SourceSpec, string) (*collector.Snapshot, error)
 type Analyzer func(context.Context, *collector.Snapshot, string, policy.Config) (*models.Report, error)
 
 type Service struct {
@@ -63,7 +63,7 @@ func (s *Service) Run(ctx context.Context, request models.ScanRequest) (*models.
 		if s.scanSources == nil {
 			return nil, errors.New("manifest source scanning is not configured")
 		}
-		sourceSnapshot, scanErr := s.scanSources(ctx, request.Sources)
+		sourceSnapshot, scanErr := s.scanSources(ctx, request.Sources, targetVersion)
 		if scanErr != nil {
 			return nil, scanErr
 		}
@@ -84,7 +84,7 @@ func (s *Service) Run(ctx context.Context, request models.ScanRequest) (*models.
 
 func emptySnapshot() *collector.Snapshot {
 	return &collector.Snapshot{
-		Deployments: []appsv1.Deployment{}, StatefulSets: []appsv1.StatefulSet{}, DaemonSets: []appsv1.DaemonSet{}, Services: []corev1.Service{}, Namespaces: []corev1.Namespace{},
+		Deployments: []appsv1.Deployment{}, StatefulSets: []appsv1.StatefulSet{}, DaemonSets: []appsv1.DaemonSet{}, Services: []corev1.Service{}, Namespaces: []corev1.Namespace{}, Events: []corev1.Event{}, Pods: []corev1.Pod{},
 		Resources: []models.KubernetesResource{}, DeprecatedAPIRequests: []models.DeprecatedAPIRequest{}, Sources: map[string]string{}, SourceResults: []models.SourceResult{}, Warnings: []string{},
 	}
 }
@@ -93,5 +93,5 @@ func snapshotResourceCount(snapshot *collector.Snapshot) int {
 	if snapshot == nil {
 		return 0
 	}
-	return len(snapshot.Deployments) + len(snapshot.StatefulSets) + len(snapshot.DaemonSets) + len(snapshot.Services) + len(snapshot.Resources)
+	return len(snapshot.Deployments) + len(snapshot.StatefulSets) + len(snapshot.DaemonSets) + len(snapshot.Services) + len(snapshot.Pods) + len(snapshot.Resources)
 }

@@ -100,6 +100,14 @@ func New(config Config) (*Scanner, error) {
 }
 
 func (s *Scanner) Scan(ctx context.Context, specs []models.SourceSpec) (*collector.Snapshot, error) {
+	return s.ScanForVersion(ctx, specs, "")
+}
+
+// ScanForVersion renders Helm sources with the Kubernetes target that the
+// report is assessing. Charts commonly branch on .Capabilities.KubeVersion;
+// leaving Helm's built-in compatibility version in place can hide or invent
+// upgrade findings.
+func (s *Scanner) ScanForVersion(ctx context.Context, specs []models.SourceSpec, targetVersion string) (*collector.Snapshot, error) {
 	combined := emptySnapshot()
 	for _, spec := range specs {
 		if err := ctx.Err(); err != nil {
@@ -115,9 +123,9 @@ func (s *Scanner) Scan(ctx context.Context, specs []models.SourceSpec) (*collect
 		case models.SourceDirectory:
 			snapshot, result, err = s.scanDirectory(ctx, spec)
 		case models.SourceHelm:
-			snapshot, result, err = s.scanHelm(ctx, spec, "", "helm:")
+			snapshot, result, err = s.scanHelm(ctx, spec, "", "helm:", targetVersion)
 		case models.SourceGit:
-			snapshot, result, err = s.scanGit(ctx, spec)
+			snapshot, result, err = s.scanGit(ctx, spec, targetVersion)
 		default:
 			err = fmt.Errorf("unsupported source type %q", spec.Type)
 		}
@@ -186,13 +194,13 @@ func (s *Scanner) scanDirectory(ctx context.Context, spec models.SourceSpec) (*c
 	if err != nil {
 		return nil, models.SourceResult{}, err
 	}
-	location := relativeLocation(s.root, resolved)
+	location := requestedLocation(s.root, spec.Path)
 	scope := "directory:" + location
 	snapshot, documents, warnings, err := s.scanPath(ctx, resolved, scope, resolved)
 	return snapshot, models.SourceResult{Type: models.SourceDirectory, Location: location, Documents: documents, Resources: len(snapshotResources(snapshot)), Warnings: warnings}, err
 }
 
-func (s *Scanner) scanHelm(ctx context.Context, spec models.SourceSpec, trustedRoot, sourcePrefix string) (*collector.Snapshot, models.SourceResult, error) {
+func (s *Scanner) scanHelm(ctx context.Context, spec models.SourceSpec, trustedRoot, sourcePrefix, targetVersion string) (*collector.Snapshot, models.SourceResult, error) {
 	chartPath := spec.Path
 	var resolved string
 	var err error
@@ -214,6 +222,12 @@ func (s *Scanner) scanHelm(ctx context.Context, spec models.SourceSpec, trustedR
 		release = "kubeimpact-scan"
 	}
 	args := []string{"template", release, resolved, "--include-crds", "--skip-tests"}
+	if targetVersion != "" {
+		if strings.Count(targetVersion, ".") == 1 {
+			targetVersion += ".0"
+		}
+		args = append(args, "--kube-version", targetVersion)
+	}
 	if spec.Namespace != "" {
 		args = append(args, "--namespace", spec.Namespace)
 	}
@@ -229,7 +243,11 @@ func (s *Scanner) scanHelm(ctx context.Context, spec models.SourceSpec, trustedR
 			return nil, models.SourceResult{}, fmt.Errorf("resolve values file %q: %w", valuesFile, err)
 		}
 		args = append(args, "--values", valuesPath)
-		valueLocations = append(valueLocations, relativeLocation(containmentRoot, valuesPath))
+		if trustedRoot == "" {
+			valueLocations = append(valueLocations, requestedLocation(s.root, valuesFile))
+		} else {
+			valueLocations = append(valueLocations, relativeLocation(containmentRoot, valuesPath))
+		}
 	}
 
 	helmHome, err := os.MkdirTemp("", "kubeimpact-helm-")
@@ -256,14 +274,18 @@ func (s *Scanner) scanHelm(ctx context.Context, spec models.SourceSpec, trustedR
 		return nil, models.SourceResult{}, fmt.Errorf("helm template failed: %s", sanitizeCommandError(stderr.String(), err))
 	}
 
-	location := helmLocation(relativeLocation(containmentRoot, resolved), release, spec.Namespace, valueLocations)
+	chartLocation := relativeLocation(containmentRoot, resolved)
+	if trustedRoot == "" {
+		chartLocation = requestedLocation(s.root, chartPath)
+	}
+	location := helmLocation(chartLocation, release, spec.Namespace, valueLocations)
 	label := sourcePrefix + location
 	snapshot, documents, err := decodeDocuments(bytes.NewReader(output.Bytes()), label, label)
 	result := models.SourceResult{Type: models.SourceHelm, Location: location, Documents: documents, Resources: len(snapshotResources(snapshot)), Warnings: []string{}}
 	return snapshot, result, err
 }
 
-func (s *Scanner) scanGit(ctx context.Context, spec models.SourceSpec) (*collector.Snapshot, models.SourceResult, error) {
+func (s *Scanner) scanGit(ctx context.Context, spec models.SourceSpec, targetVersion string) (*collector.Snapshot, models.SourceResult, error) {
 	host, sanitized, err := gitHost(spec.URL)
 	if err != nil {
 		return nil, models.SourceResult{}, err
@@ -328,7 +350,7 @@ func (s *Scanner) scanGit(ctx context.Context, spec models.SourceSpec) (*collect
 		helmSpec := spec
 		helmSpec.Type = models.SourceHelm
 		helmSpec.Path = spec.ChartPath
-		snapshot, result, scanErr := s.scanHelm(ctx, helmSpec, repository, "git:"+location+"#")
+		snapshot, result, scanErr := s.scanHelm(ctx, helmSpec, repository, "git:"+location+"#", targetVersion)
 		result.Type = models.SourceGit
 		result.Location = location + "#" + result.Location
 		return snapshot, result, scanErr
@@ -488,9 +510,16 @@ func addObject(snapshot *collector.Snapshot, object unstructured.Unstructured, s
 	}
 	if object.GetName() == "" {
 		if object.GetGenerateName() == "" {
-			return fmt.Errorf("%s %s has neither metadata.name nor metadata.generateName", object.GetAPIVersion(), object.GetKind())
+			if !isConfigurationDocument(object.GetAPIVersion(), object.GetKind()) {
+				return fmt.Errorf("%s %s has neither metadata.name nor metadata.generateName", object.GetAPIVersion(), object.GetKind())
+			}
+			// Component configuration documents are not API resources and normally
+			// have no ObjectMeta. A stable synthetic name lets them participate in
+			// findings without weakening validation for Kubernetes API objects.
+			object.SetName(object.GetKind())
+		} else {
+			object.SetName(object.GetGenerateName() + "<generated>")
 		}
-		object.SetName(object.GetGenerateName() + "<generated>")
 	}
 	if object.GetNamespace() == "" && isKnownNamespacedKind(object.GetKind()) {
 		object.SetNamespace("default")
@@ -505,7 +534,7 @@ func addObject(snapshot *collector.Snapshot, object unstructured.Unstructured, s
 
 	snapshot.Resources = append(snapshot.Resources, models.KubernetesResource{
 		Kind: object.GetKind(), Namespace: object.GetNamespace(), Name: object.GetName(), Namespaced: object.GetNamespace() != "",
-		ObservedAPIVersions: []string{object.GetAPIVersion()}, Source: source,
+		ObservedAPIVersions: []string{object.GetAPIVersion()}, Source: source, Object: object.DeepCopy().Object,
 	})
 	snapshot.Sources[collector.ResourceKey(object.GetKind(), object.GetNamespace(), object.GetName())] = source
 
@@ -541,6 +570,18 @@ func addObject(snapshot *collector.Snapshot, object unstructured.Unstructured, s
 			return err
 		}
 		snapshot.Namespaces = append(snapshot.Namespaces, value)
+	case "v1/Event":
+		var value corev1.Event
+		if err := converter.FromUnstructured(object.Object, &value); err != nil {
+			return err
+		}
+		snapshot.Events = append(snapshot.Events, value)
+	case "v1/Pod":
+		var value corev1.Pod
+		if err := converter.FromUnstructured(object.Object, &value); err != nil {
+			return err
+		}
+		snapshot.Pods = append(snapshot.Pods, value)
 	}
 	return nil
 }
@@ -548,7 +589,7 @@ func addObject(snapshot *collector.Snapshot, object unstructured.Unstructured, s
 func emptySnapshot() *collector.Snapshot {
 	return &collector.Snapshot{
 		Deployments: []appsv1.Deployment{}, StatefulSets: []appsv1.StatefulSet{}, DaemonSets: []appsv1.DaemonSet{},
-		Services: []corev1.Service{}, Namespaces: []corev1.Namespace{}, Resources: []models.KubernetesResource{},
+		Services: []corev1.Service{}, Namespaces: []corev1.Namespace{}, Events: []corev1.Event{}, Pods: []corev1.Pod{}, Resources: []models.KubernetesResource{},
 		DeprecatedAPIRequests: []models.DeprecatedAPIRequest{}, Sources: map[string]string{}, SourceResults: []models.SourceResult{}, Warnings: []string{},
 	}
 }
@@ -703,8 +744,27 @@ func ignoredDirectory(name string) bool {
 
 func isKnownNamespacedKind(kind string) bool {
 	switch kind {
-	case "Deployment", "StatefulSet", "DaemonSet", "Service":
+	case "Deployment", "StatefulSet", "DaemonSet", "Service", "Pod", "Event", "Workload", "PodGroup":
 		return true
+	default:
+		return false
+	}
+}
+
+func isConfigurationDocument(apiVersion, kind string) bool {
+	switch kind {
+	case "InitConfiguration", "ClusterConfiguration", "JoinConfiguration", "ResetConfiguration", "UpgradeConfiguration":
+		return apiVersion == "kubeadm.k8s.io/v1beta3" || apiVersion == "kubeadm.k8s.io/v1beta4"
+	case "KubeletConfiguration":
+		return strings.HasPrefix(apiVersion, "kubelet.config.k8s.io/")
+	case "KubeProxyConfiguration":
+		return strings.HasPrefix(apiVersion, "kubeproxy.config.k8s.io/")
+	case "KubeSchedulerConfiguration":
+		return strings.HasPrefix(apiVersion, "kubescheduler.config.k8s.io/")
+	case "KubeControllerManagerConfiguration":
+		return strings.HasPrefix(apiVersion, "controllermanager.config.k8s.io/") || strings.HasPrefix(apiVersion, "kubecontrollermanager.config.k8s.io/")
+	case "CloudControllerManagerConfiguration":
+		return strings.HasPrefix(apiVersion, "cloudcontrollermanager.config.k8s.io/")
 	default:
 		return false
 	}
@@ -719,6 +779,20 @@ func relativeLocation(root, path string) string {
 		return filepath.ToSlash(path)
 	}
 	return filepath.ToSlash(relative)
+}
+
+// requestedLocation preserves the user-visible identity of a validated local
+// source. Kubernetes projected volumes use rotating symlink targets; using the
+// resolved target as report identity would make unchanged scan requests produce
+// new fingerprints after every ConfigMap update.
+func requestedLocation(root, input string) string {
+	cleaned := filepath.Clean(input)
+	if filepath.IsAbs(cleaned) {
+		if relative, err := filepath.Rel(root, cleaned); err == nil {
+			cleaned = relative
+		}
+	}
+	return filepath.ToSlash(cleaned)
 }
 
 func snapshotResources(snapshot *collector.Snapshot) []models.KubernetesResource {

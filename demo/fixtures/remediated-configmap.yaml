@@ -1,0 +1,169 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubeimpact-upgrade-source
+  namespace: kubeimpact-demo
+  labels:
+    app.kubernetes.io/part-of: kubeimpact-demo
+    kubeimpact.io/fixture-phase: remediated
+data:
+  manifests.yaml: |
+    apiVersion: scheduling.k8s.io/v1beta1
+    kind: Workload
+    metadata:
+      name: checkout-batch
+      namespace: shop
+    ---
+    apiVersion: scheduling.k8s.io/v1beta1
+    kind: PodGroup
+    metadata:
+      name: checkout-workers
+      namespace: shop
+    ---
+    apiVersion: kubeadm.k8s.io/v1beta4
+    kind: InitConfiguration
+    metadata:
+      name: demo-init
+    ---
+    apiVersion: kubeadm.k8s.io/v1beta4
+    kind: ClusterConfiguration
+    metadata:
+      name: demo-cluster
+    ---
+    apiVersion: kubeadm.k8s.io/v1beta4
+    kind: JoinConfiguration
+    metadata:
+      name: demo-join
+    ---
+    apiVersion: certificates.k8s.io/v1
+    kind: ClusterTrustBundle
+    metadata:
+      name: demo-trust-bundle
+    ---
+    apiVersion: certificates.k8s.io/v1
+    kind: PodCertificateRequest
+    metadata:
+      name: checkout-identity
+      namespace: shop
+    ---
+    apiVersion: storagemigration.k8s.io/v1
+    kind: StorageVersionMigration
+    metadata:
+      name: demo-storage-migration
+    ---
+    apiVersion: kubelet.config.k8s.io/v1beta1
+    kind: KubeletConfiguration
+    metadata:
+      name: demo-kubelet
+    eventRecordQPS: 50
+    ---
+    apiVersion: kubeproxy.config.k8s.io/v1alpha1
+    kind: KubeProxyConfiguration
+    metadata:
+      name: demo-kube-proxy
+    mode: nftables
+    ---
+    apiVersion: kubeproxy.config.k8s.io/v1alpha1
+    kind: KubeProxyConfiguration
+    metadata:
+      name: demo-kube-proxy-default
+    mode: iptables
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: demo-node-log-reader
+    rules:
+      - apiGroups: [""]
+        resources: ["nodes"]
+        verbs: ["get"]
+    ---
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: kubelet-static-api-client
+      namespace: kube-system
+      annotations:
+        kubernetes.io/config.source: file
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kubelet
+          image: registry.k8s.io/pause:3.10.1
+          resources:
+            requests:
+              cpu: 10m
+              memory: 8Mi
+            limits:
+              memory: 16Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+    ---
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: coredns
+      namespace: kube-system
+      labels:
+        app: coredns
+        k8s-app: coredns
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: coredns
+      template:
+        metadata:
+          labels:
+            app: coredns
+        spec:
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: dns
+              image: registry.k8s.io/coredns/coredns:v1.13.1
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  memory: 32Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+    ---
+    apiVersion: cloudcontrollermanager.config.k8s.io/v1alpha1
+    kind: CloudControllerManagerConfiguration
+    metadata:
+      name: demo-cloud-controller-manager
+    nodeLifecycleController:
+      nodeMonitorPeriod: 5s
+    ---
+    apiVersion: v1
+    kind: Event
+    metadata:
+      name: checkout-selinux-conflict
+      namespace: shop
+    involvedObject:
+      apiVersion: v1
+      kind: Pod
+      namespace: shop
+      name: checkout-0
+    reason: Remediated
+    message: The demo workload now uses a compatible SELinux volume policy.
+    source:
+      component: selinux_warning

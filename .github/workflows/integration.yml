@@ -1,0 +1,39 @@
+name: Upgrade demo integration
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kind-upgrade-demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned Kind and kubectl
+        run: ./scripts/ci-tools.sh
+
+      - name: Validate demo files
+        run: make validate
+
+      - name: Build and scan the blocked upgrade
+        run: make demo
+
+      - name: Prove upgrade detection, remediation, and persistence
+        run: make test
+
+      - name: Diagnostics
+        if: failure()
+        run: make diagnostics || true
+
+      - name: Clean up
+        if: always()
+        run: make destroy

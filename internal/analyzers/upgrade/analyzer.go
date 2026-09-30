@@ -39,15 +39,18 @@ func (a *Analyzer) Analyze(ctx context.Context, snapshot *collector.Snapshot) (*
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		if rules.Version == "1.37" {
+			appendWarning(snapshot, "SELinuxMount conflict coverage depends on the optional Kubernetes 1.36 selinux-warning-controller emitting Events; enable that controller and review its metrics before upgrading clusters that enforce SELinux.")
+		}
 
 		for _, resource := range snapshot.Resources {
 			for _, rule := range rules.RemovedAPIs {
-				if observedVersion(resource, rule.GroupVersion) && resource.Kind == rule.Kind {
+				if ruleApplies(resource, rule) {
 					impacts = append(impacts, apiImpact(resource, rule, models.Critical, "removed API"))
 				}
 			}
 			for _, rule := range rules.DeprecatedAPIs {
-				if observedVersion(resource, rule.GroupVersion) && resource.Kind == rule.Kind {
+				if ruleApplies(resource, rule) {
 					impacts = append(impacts, apiImpact(resource, rule, models.Medium, "deprecated API"))
 				}
 			}
@@ -84,6 +87,16 @@ func (a *Analyzer) Analyze(ctx context.Context, snapshot *collector.Snapshot) (*
 	return &models.AnalysisResult{UpgradeImpact: impacts}, nil
 }
 
+func ruleApplies(resource models.KubernetesResource, rule knowledge.APIRule) bool {
+	if rule.SourceOnly && (resource.Source == "" || resource.Source == "cluster") {
+		return false
+	}
+	if rule.MatchPresence && resource.Source == "cluster" && resource.ListedAPIVersion == rule.GroupVersion {
+		return resource.Kind == rule.Kind
+	}
+	return resource.Kind == rule.Kind && observedVersion(resource, rule.GroupVersion)
+}
+
 func (a *Analyzer) evaluateResourceCheck(check knowledge.ResourceCheck, snapshot *collector.Snapshot) ([]models.UpgradeImpact, error) {
 	switch check.Name {
 	case "serviceExternalIPs":
@@ -113,9 +126,42 @@ func (a *Analyzer) evaluateResourceCheck(check knowledge.ResourceCheck, snapshot
 			})
 		}
 		return impacts, nil
+	case "kubeletEventRecordQPSZero":
+		return evaluateKubeletEventRecordQPS(check, snapshot), nil
+	case "selinuxVolumeConflict":
+		return evaluateSELinuxVolumeConflicts(check, snapshot), nil
+	case "kubeProxyIPVS":
+		return evaluateKubeProxyIPVS(check, snapshot), nil
+	case "kubeProxyModeUnset":
+		return evaluateKubeProxyModeUnset(check, snapshot), nil
+	case "kubeDNS":
+		return evaluateKubeDNS(check, snapshot), nil
+	case "nodeLogsRBAC":
+		return evaluateNodeLogsRBAC(check, snapshot), nil
+	case "staticPodAPIReference":
+		return evaluateStaticPodAPIReferences(check, snapshot), nil
+	case "kubeletCgroupV1Override":
+		return evaluateKubeletCgroupV1Override(check, snapshot), nil
+	case "cloudNodeMonitorPeriod":
+		return evaluateCloudNodeMonitorPeriod(check, snapshot), nil
+	case "lockedFeatureGate":
+		return evaluateLockedFeatureGates(check, snapshot), nil
+	case "removedFeatureGate":
+		return evaluateRemovedFeatureGates(check, snapshot), nil
+	case "removedComponentFlag":
+		return evaluateRemovedComponentFlags(check, snapshot), nil
 	default:
 		return nil, fmt.Errorf("upgrade rule %s uses unknown resource check %q", check.ID, check.Name)
 	}
+}
+
+func appendWarning(snapshot *collector.Snapshot, warning string) {
+	for _, existing := range snapshot.Warnings {
+		if existing == warning {
+			return
+		}
+	}
+	snapshot.Warnings = append(snapshot.Warnings, warning)
 }
 
 func observedVersion(resource models.KubernetesResource, wanted string) bool {
@@ -130,7 +176,11 @@ func observedVersion(resource models.KubernetesResource, wanted string) bool {
 func apiImpact(resource models.KubernetesResource, rule knowledge.APIRule, severity models.Severity, expected string) models.UpgradeImpact {
 	fieldPath := "apiVersion"
 	if resource.Source == "" || resource.Source == "cluster" {
-		fieldPath = "metadata.managedFields[].apiVersion"
+		if rule.MatchPresence && resource.ListedAPIVersion == rule.GroupVersion {
+			fieldPath = "listedApiVersion"
+		} else {
+			fieldPath = "metadata.managedFields[].apiVersion"
+		}
 	}
 	return models.UpgradeImpact{
 		Rule:             rule.ID,

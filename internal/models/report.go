@@ -2,6 +2,13 @@ package models
 
 import "time"
 
+type EvidenceStatus string
+
+const (
+	EvidenceComplete EvidenceStatus = "complete"
+	EvidencePartial  EvidenceStatus = "partial"
+)
+
 type Summary struct {
 	Critical int `json:"critical"`
 	High     int `json:"high"`
@@ -11,12 +18,14 @@ type Summary struct {
 }
 
 type Report struct {
-	ScanID            string    `json:"scanId"`
-	ClusterVersion    string    `json:"clusterVersion"`
-	TargetVersion     string    `json:"targetVersion"`
-	GeneratedAt       time.Time `json:"generatedAt"`
-	PolicyProfile     string    `json:"policyProfile"`
-	PolicyFingerprint string    `json:"policyFingerprint"`
+	ScanID            string         `json:"scanId"`
+	ClusterVersion    string         `json:"clusterVersion"`
+	TargetVersion     string         `json:"targetVersion"`
+	GeneratedAt       time.Time      `json:"generatedAt"`
+	PolicyProfile     string         `json:"policyProfile"`
+	PolicyFingerprint string         `json:"policyFingerprint"`
+	RuleFingerprint   string         `json:"ruleFingerprint"`
+	EvidenceStatus    EvidenceStatus `json:"evidenceStatus"`
 
 	Score          int            `json:"score"`
 	ScoreBreakdown ScoreBreakdown `json:"scoreBreakdown"`

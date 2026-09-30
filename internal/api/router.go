@@ -37,7 +37,7 @@ func NewRouter(ctx context.Context) (*gin.Engine, func() error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	scanner := clusterscan.New(policyConfig, sourceScanner.Scan)
+	scanner := clusterscan.New(policyConfig, sourceScanner.ScanForVersion)
 	manager := clusterscan.NewManager(repository, scanner.Run, durationFromEnvironment("KUBEIMPACT_SCAN_TIMEOUT", 60*time.Second))
 	managerContext, cancelManager := context.WithCancel(ctx)
 	if err := manager.Start(managerContext); err != nil {
